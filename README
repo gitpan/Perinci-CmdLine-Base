@@ -1,0 +1,151 @@
+NAME
+    Perinci::CmdLine::Base - Base class for Perinci::CmdLine{,::Lite}
+
+VERSION
+    This document describes version 0.01 of Perinci::CmdLine::Base (from
+    Perl distribution Perinci-CmdLine-Base), released on 2014-07-16.
+
+REQUEST KEYS
+    The various values in the $r hash/stash.
+
+    *   action => str
+
+        Selected action to use. Usually set from the common options.
+
+    *   format => str
+
+        Selected format to use. Usually set from the common option
+        "--format".
+
+    *   parse_argv_res => array
+
+        Enveloped result of "parse_argv()".
+
+    *   skip_parse_subcommand_argv => bool
+
+        Checked by "parse_argv()". Can be set to 1, e.g. in common option
+        handler for "--help" or "--version" to skip parsing @ARGV for
+        per-subcommand options.
+
+    *   args => hash
+
+        Also taken from "parse_arg()" result.
+
+    *   meta => hash
+
+        Result of "get_meta()".
+
+    *   dry_run => bool
+
+        Whether to pass "-dry_run" special argument to function.
+
+    *   res => array
+
+        Enveloped result of "action_ACTION()".
+
+    *   fres => str
+
+        Result from "hook_format_result()".
+
+ATTRIBUTES
+  actions => array
+  common_opts => hash
+  default_subcommand => str
+  get_subcommand_from_arg => int (default: 1)
+    The default is 1, which is to get subcommand from the first command-line
+    argument except when there is "default_subcommand" defined. Other valid
+    values are: 0 (not getting from first command-line argument), 2 (get
+    from first command-line argument even though there is
+    "default_subcommand" defined).
+
+  description => str
+  exit => bool (default: 1)
+  formats => array
+    Available output formats.
+
+  pass_cmdline_object => bool (default: 0)
+  program_name => str
+    Default is from PERINCI_CMDLINE_PROGRAM_NAME environment or from $0.
+
+  subcommands => hash | code
+  summary => str
+  tags => array of str
+  url => str
+METHODS
+  $cmd->run() => ENVRES
+    Will parse command-line arguments with "parse_argv()", select/set
+    subcommand, call hooks, run the appropriate "run_ACTION()" method, and
+    finally format and display the result.
+
+    The "run_ACTION()" methods will be passed $r and is supposed to return
+    an enveloped result. The result will then be put in "$r-"{res}>.
+
+    If "exit" attribute is true, will exit with the action's envelope result
+    status. If status is 200, exit code is 0. Otherwise exit code is status
+    minus 300. So, a response "[501, "Not implemented"]" will result in exit
+    code of 201.
+
+    If "exit" attribute is false, will simply return the action result
+    ("$r-"{res}>).
+
+  $cmd->do_completion() => ENVRES
+    Called by run().
+
+  $cmd->parse_argv() => ENVRES
+    Called by run().
+
+  $cmd->get_meta($url) => ENVRES
+    Called by parse_argv() or do_completion(). Subclass has to implement
+    this.
+
+HOOKS
+    All hooks will receive the argument $r, a per-request hash/stash. The
+    list below is by order of calling.
+
+  $cmd->hook_before_run($r)
+    Called at the start of "run()". Can be used to set some initial values
+    of other $r keys. Or setup the logger.
+
+  $cmd->hook_after_parse_argv($r)
+    Called after "run()" calls "parse_argv()" and before it checks the
+    result. "$r-"{parse_argv_res}> will contain the result of
+    "parse_argv()". The hook gets a chance to, e.g. fill missing arguments
+    from other source.
+
+  $cmd->hook_format_result($r)
+    The hook is supposed to format result in "$res-"{res}> (an array).
+
+  $cmd->hook_display_result($r)
+    The hook is supposed to display the formatted result (stored in
+    "$r-"{fres}>) to STDOUT. But in the case of streaming output, this hook
+    can also set it up.
+
+  $cmd->hook_after_run($r)
+    Called at the end of "run()", right before it exits (if "exit" attribute
+    is true) or returns "$r-"{res}>. The hook has a chance to modify exit
+    code or result.
+
+HOMEPAGE
+    Please visit the project's homepage at
+    <https://metacpan.org/release/Perinci-CmdLine-Base>.
+
+SOURCE
+    Source repository is at
+    <https://github.com/sharyanto/perl-Perinci-CmdLine-Base>.
+
+BUGS
+    Please report any bugs or feature requests on the bugtracker website
+    <https://rt.cpan.org/Public/Dist/Display.html?Name=Perinci-CmdLine-Base>
+
+    When submitting a bug or request, please include a test-file or a patch
+    to an existing test-file that illustrates the bug or desired feature.
+
+AUTHOR
+    Steven Haryanto <stevenharyanto@gmail.com>
+
+COPYRIGHT AND LICENSE
+    This software is copyright (c) 2014 by Steven Haryanto.
+
+    This is free software; you can redistribute it and/or modify it under
+    the same terms as the Perl 5 programming language system itself.
+
