@@ -1,7 +1,7 @@
 package Perinci::CmdLine::Base;
 
-our $DATE = '2014-07-16'; # DATE
-our $VERSION = '0.01'; # VERSION
+our $DATE = '2014-07-17'; # DATE
+our $VERSION = '0.02'; # VERSION
 
 use 5.010001;
 
@@ -13,12 +13,16 @@ use Mo qw'build default';
 
 has actions => ();
 has common_opts => ();
+has custom_completer => ();
+has custom_arg_completer => ();
 has default_subcommand => ();
 has get_subcommand_from_arg => (is=>'rw', default=>1);
 has description => ();
 has exit => (is=>'rw', default=>1);
 has formats => ();
 has pass_cmdline_object => (default=>0);
+has per_arg_json => ();
+has per_arg_yaml => ();
 has program_name => (
     default => sub {
         my $pn = $ENV{PERINCI_CMDLINE_PROGRAM_NAME};
@@ -31,12 +35,12 @@ has subcommands => ();
 has summary => ();
 has tags => ();
 has url => ();
+has _pa => ();
 
 # role: requires 'get_meta' # ($url)
 
 # role: requires 'hook_before_run'
 # role: requires 'hook_after_parse_argv'
-# role: requires 'hook_after_select_subcommand'
 # role: requires 'hook_format_result'
 # role: requires 'hook_display_result'
 # role: requires 'hook_after_run'
@@ -70,7 +74,7 @@ sub list_subcommands {
     my $scs = $self->subcommands;
     my $res;
     if ($scs) {
-        if (reftype($scs) eq 'CODE') {
+        if (ref($scs) eq 'CODE') {
             $scs = $scs->($self);
             $self->_err("Subcommands code didn't return a hashref")
                 unless ref($scs) eq 'HASH';
@@ -88,34 +92,151 @@ sub status2exitcode {
     $status - 300;
 }
 
-# XXX
 sub do_completion {
-    my $self = shift;
+    require Complete::Bash;
 
-    # @ARGV given by bash is messed up / different, we get words from parsing,
-    # COMP_LINE/COMP_POINT. this might not be the case with other shells like
-    # zsh/fish. XXX detect running shell.
-    #require Complete::Bash;
-    #my ($words, $cword) = Complete::Bash::parse_cmdline();
-}
-
-sub parse_argv {
     my ($self, $r) = @_;
 
-    # we parse argv twice. the first parse is with common_opts only so we're
-    # able to catch --help, --version, etc early without having to know about
-    # subcommands. two reasons for this: sometimes we need to get subcommand
-    # name *from* cmdline opts (e.g. --cmd) and thus it's a chicken-and-egg
-    # problem. second, it's faster (especially in P::C case).
-    #
-    # the second parse is after ge get subcommand name and the function
-    # metadata. we can parse the remaining argv to get function arguments.
-    #
-    # note that when doing completion we're not using this algorithem and only
-    # parse argv once. this is to make completion work across common- and
-    # per-subcommand opts, e.g. --he<tab> resulting in --help (common opt) as
-    # well as --height (function argument).
+    my $word_breaks = "=";
 
+    # check whether subcommand is defined. try to search from --cmd, first
+    # command-line argument, or default_subcommand.
+
+    {
+        # @ARGV given by bash is messed up / different, we get words from
+        # parsing, COMP_LINE/COMP_POINT. this might not be the case with other
+        # shells like zsh/fish. XXX detect running shell.
+        my $words = Complete::Bash::break_cmdline_into_words(
+            $ENV{COMP_LINE}, $word_breaks);
+        shift @$words; # shave program name
+        local @ARGV = @$words;
+        $self->_parse_argv1($r, {for_completion=>1});
+    }
+
+    my ($words, $cword) = Complete::Bash::parse_cmdline(
+        undef, undef, $word_breaks);
+
+    my $scn = $r->{subcommand_name} // "";
+    my $scd = $r->{subcommand_data};
+
+    # strip subcommand name from first command-line argument because it
+    # interferes with later parsing
+    if ($scd && $scn eq $words->[0]) {
+        shift @$words;
+        $cword--;
+    }
+
+    my $word = $words->[$cword] // "";
+
+    # determine whether we should complete function arg names/values or just
+    # top-level opts + subcommands name
+
+    my $do_arg = 0;
+    {
+        if (!$self->subcommands) {
+            # do_arg because single command
+            $do_arg++; last;
+        }
+
+        # whether user typed 'blah blah ^' or 'blah blah^'
+        my $space_typed = !defined($word);
+
+        # e.g: spanel delete-account ^
+        if ($self->subcommands && $cword > 0 && $space_typed) {
+            # do_arg because last word typed (+space) is subcommand name
+            $do_arg++; last;
+        }
+
+        # e.g: spanel delete-account --format=yaml --acc^
+        # e.g: spanel --cmd delete-account --acc^
+        if ($cword > 0 && !$space_typed && $scd) {
+            # do_arg because subcommand has been defined
+            $do_arg++; last;
+        }
+
+        # not do_arg
+    }
+
+    # get all command-line options
+
+    my $co = $self->common_opts;
+    my $meta;
+    my @all_opts;
+    my @common_opts;
+    {
+        my %go_spec;
+        my %go_spec_common = map { $co->{$_}{getopt} => sub {} } keys %$co;
+
+        $meta = $self->get_meta($scd->{url} // $self->{url});
+
+        if ($meta) {
+            require Perinci::Sub::GetArgs::Argv;
+            my $res = Perinci::Sub::GetArgs::Argv::gen_getopt_long_spec_from_meta(
+                meta         => $meta,
+                common_opts  => $co,
+                per_arg_json => $self->{per_arg_json},
+                per_arg_yaml => $self->{per_arg_yaml},
+            );
+            %go_spec = %{ $res->[2] };
+        } else {
+            %go_spec = %go_spec_common;
+        }
+        require Getopt::Long::Util;
+        for (keys %go_spec_common) {
+            my $res = Getopt::Long::Util::parse_getopt_long_opt_spec($_);
+            for (@{ $res->{opts} }) {
+                push @common_opts, length > 1 ? "--$_" : "-$_";
+            }
+        }
+        for (keys %go_spec) {
+            my $res = Getopt::Long::Util::parse_getopt_long_opt_spec($_);
+            for (@{ $res->{opts} }) {
+                push @all_opts, length > 1 ? "--$_" : "-$_";
+            }
+        }
+    }
+
+    # do completion
+
+    my $res;
+    if ($do_arg) {
+        # Completing subcommand argument names & values ...
+        require Perinci::Sub::Complete;
+        $res = Perinci::Sub::Complete::complete_cli_arg(
+            meta            => $meta,
+            words           => $words,
+            cword           => $cword,
+            common_opts     => \@common_opts,
+            riap_server_url => $scd->{url},
+            riap_uri        => undef,
+            riap_client     => $self->_pa,
+            custom_completer     => $self->custom_completer,
+            custom_arg_completer => $self->custom_arg_completer,
+        );
+    } else {
+        require Complete::Util;
+        # Completing top-level options + subcommand name ...
+        my @ary;
+        push @ary, @all_opts;
+        my $scs = $self->list_subcommands;
+        push @ary, keys %$scs;
+        $res = {
+            completion => Complete::Util::complete_array_elem(
+                word=>$word, array=>\@ary,
+            ),
+            type=>'option',
+        };
+    }
+
+    [200, "OK", Complete::Bash::format_completion($res)];
+}
+
+sub _parse_argv1 {
+    my ($self, $r, $opts) = @_;
+
+    $opts //= {}; # for_completion: ignore unknown subcommand
+
+    # parse common_opts which potentially sets subcommand
     {
         # one small downside for this is that we cannot do autoabbrev here,
         # because we're not yet specifying all options here.
@@ -149,7 +270,11 @@ sub parse_argv {
         if (!defined($scn) && $self->{subcommands} && @ARGV) {
             # get from first command-line arg
             if ($ARGV[0] =~ /\A-/) {
-                die [400, "Unknown option: $ARGV[0]"];
+                if ($opts->{for_completion}) {
+                    $scn = shift @ARGV;
+                } else {
+                    die [400, "Unknown option: $ARGV[0]"];
+                }
             } else {
                 $scn = shift @ARGV;
             }
@@ -158,7 +283,9 @@ sub parse_argv {
         my $scd;
         if (defined $scn) {
             $scd = $self->get_subcommand_data($scn);
-            die [500, "Unknown subcommand: $scn"] unless $scd;
+            unless ($opts->{for_completion}) {
+                die [500, "Unknown subcommand: $scn"] unless $scd;
+            }
         } elsif (!$r->{action}) {
             # user doesn't specify any subcommand, or specific action. display
             # help instead.
@@ -178,10 +305,30 @@ sub parse_argv {
         $r->{subcommand_data} = $scd;
     }
 
-    my %args;
-
     # also set dry-run on environment
     $r->{dry_run} = 1 if $ENV{DRY_RUN};
+}
+
+sub parse_argv {
+    my ($self, $r) = @_;
+
+    # we parse argv twice. the first parse is with common_opts only so we're
+    # able to catch --help, --version, etc early without having to know about
+    # subcommands. two reasons for this: sometimes we need to get subcommand
+    # name *from* cmdline opts (e.g. --cmd) and thus it's a chicken-and-egg
+    # problem. second, it's faster (especially in P::C case).
+    #
+    # the second parse is after ge get subcommand name and the function
+    # metadata. we can parse the remaining argv to get function arguments.
+    #
+    # note that when doing completion we're not using this algorithem and only
+    # parse argv once. this is to make completion work across common- and
+    # per-subcommand opts, e.g. --he<tab> resulting in --help (common opt) as
+    # well as --height (function argument).
+
+    $self->_parse_argv1($r);
+
+    my %args;
 
     # parse argv for per-subcommand command-line opts
     if ($r->{skip_parse_subcommand_argv}) {
@@ -191,6 +338,8 @@ sub parse_argv {
         my $meta = $self->get_meta($scd->{url});
         $r->{meta} = $meta;
 
+        $r->{format} //= $meta->{'x.perinci.cmdline.default_format'};
+
         my $co = $self->common_opts;
         require Perinci::Sub::GetArgs::Argv;
         my $res = Perinci::Sub::GetArgs::Argv::get_args_from_argv(
@@ -198,8 +347,8 @@ sub parse_argv {
             args                => $scd->{args} ? { %{$scd->{args}} } : undef,
             meta                => $meta,
             allow_extra_elems   => 0,
-            per_arg_json        => 1,
-            per_arg_yaml        => 1,
+            per_arg_json        => $self->{per_arg_json},
+            per_arg_yaml        => $self->{per_arg_yaml},
             common_opts         => { map {$co->{$_}{getopt} => sub{}}
                                          keys %$co },
             on_missing_required_args => sub {
@@ -222,14 +371,15 @@ sub parse_argv {
 sub run {
     my ($self) = @_;
 
+    my $r = {};
+
     # completion is special case, we delegate to do_completion()
     if ($ENV{COMP_LINE}) {
-        return do_completion();
+        $r->{res} = $self->do_completion($r);
+        goto FORMAT;
     }
 
-    my $r;
     eval {
-        $r = {};
         $self->hook_before_run($r);
 
         my $parse_res = $self->parse_argv($r);
@@ -263,10 +413,9 @@ sub run {
             $r->{res} = [500, "Bug: no response produced"];
         }
     }
+  FORMAT:
     $r->{fres} = $self->hook_format_result($r);
     $self->hook_display_result($r);
-
-  L1:
     $self->hook_after_run($r);
     if ($self->exit) {
         if ($r->{res}[3] && $r->{res}[3]{'cmdline.exit_code'}) {
@@ -294,7 +443,7 @@ Perinci::CmdLine::Base - Base class for Perinci::CmdLine{,::Lite}
 
 =head1 VERSION
 
-This document describes version 0.01 of Perinci::CmdLine::Base (from Perl distribution Perinci-CmdLine-Base), released on 2014-07-16.
+This document describes version 0.02 of Perinci::CmdLine::Base (from Perl distribution Perinci-CmdLine-Base), released on 2014-07-17.
 
 =for Pod::Coverage ^(.+)$
 
@@ -347,9 +496,151 @@ Result from C<hook_format_result()>.
 
 =head2 actions => array
 
+Contains a list of known actions and their metadata. Keys should be action
+names, values should be metadata. Metadata is a hash containing these keys:
+
+=over
+
+=item * default_log => BOOL (optional)
+
+Whether to enable logging by default (Log::Any::App) when C<LOG> environment
+variable is not set. To speed up program startup, logging is by default turned
+off for simple actions like C<help>, C<list>, C<version>.
+
+=item * use_utf8 => BOOL (optional)
+
+Whether to issue C<< binmode(STDOUT, ":utf8") >>. See L</"UTF8 OUTPUT"> for more
+details.
+
+=back
+
 =head2 common_opts => hash
 
+A hash of common options, which are command-line options that are not associated
+with any subcommand. Each option is itself a specification hash containing these
+keys:
+
+=over
+
+=item * category (str)
+
+Optional, for grouping options in help/usage message, defaults to C<Common
+options>.
+
+=item * getopt (str)
+
+Required, for Getopt::Long specification.
+
+=item * handler (code)
+
+Required, for Getopt::Long specification.
+
+=item * usage (str)
+
+Optional, displayed in usage line in help/usage text.
+
+=item * summary (str)
+
+Optional, displayed in description of the option in help/usage text.
+
+=item * show_in_usage (bool or code, default: 1)
+
+A flag, can be set to 0 if we want to skip showing this option in usage in
+--help, to save some space. The default is to show all, except --subcommand when
+we are executing a subcommand (obviously).
+
+=item * show_in_options (bool or code, default: 1)
+
+A flag, can be set to 0 if we want to skip showing this option in options in
+--help. The default is to 0 for --help and --version in compact help. Or
+--subcommands, if we are executing a subcommand (obviously).
+
+=item * order (int)
+
+Optional, for ordering. Lower number means higher precedence, defaults to 1.
+
+=back
+
+A partial example from the default set by the framework:
+
+ {
+     help => {
+         category        => 'Common options',
+         getopt          => 'help|h|?',
+         usage           => '--help (or -h, -?)',
+         handler         => sub { ... },
+         order           => 0,
+         show_in_options => sub { $ENV{VERBOSE} },
+     },
+     format => {
+         category    => 'Common options',
+         getopt      => 'format=s',
+         summary     => 'Choose output format, e.g. json, text',
+         handler     => sub { ... },
+     },
+     undo => {
+         category => 'Undo options',
+         getopt   => 'undo',
+         ...
+     },
+     ...
+ }
+
+The default contains: help (getopt C<help|h|?>), version (getopt C<version|v>),
+action (getopt C<action>), format (getopt C<format=s>), format_options (getopt
+C<format-options=s>), json*, yaml*, perl*. If there are more than one
+subcommands, this will also be added: list (getopt C<list|l>). If dry-run is
+supported by function, there will also be: dry_run (getopt C<dry-run>). If undo
+is turned on, there will also be: undo (getopt C<undo>), redo (getopt C<redo>),
+history (getopt C<history>), clear_history (getopt C<clear-history>).
+
+*) Currently only added if you say C<use Perinci::CmdLine 1.04>.
+
+Sometimes you do not want some options, e.g. to remove C<format> and
+C<format_options>:
+
+ delete $cmd->common_opts->{format};
+ delete $cmd->common_opts->{format_options};
+ $cmd->run;
+
+Sometimes you want to rename some command-line options, e.g. to change version
+to use capital C<-V> instead of C<-v>:
+
+ $cmd->common_opts->{version}{getopt} = 'version|V';
+
+Sometimes you want to add subcommands as common options instead. For example:
+
+ $cmd->common_opts->{halt} = {
+     category    => 'Server options',
+     getopt      => 'halt',
+     summary     => 'Halt the server',
+     handler     => sub {
+         $cmd->{_subcommand_name} = 'shutdown';
+     },
+ };
+
+This will make:
+
+ % cmd --halt
+
+equivalent to executing the 'shutdown' subcommand:
+
+ % cmd shutdown
+
+=head2 custom_arg_completer => code | hash => {of=>code}
+
+Will be passed to L<Perinci::Sub::Complete>'s C<complete_cli_arg()>. See its
+documentation for more details.
+
+=head2 custom_completer => code
+
+Will be passed to L<Perinci::Sub::Complete>'s C<complete_cli_arg()>. See its
+documentation for more details.
+
 =head2 default_subcommand => str
+
+Set subcommand to this if user does not specify which to use (either via first
+command-line argument or C<--cmd> option). See also: C<get_subcommand_from_arg>.
 
 =head2 get_subcommand_from_arg => int (default: 1)
 
@@ -368,17 +659,117 @@ Available output formats.
 
 =head2 pass_cmdline_object => bool (default: 0)
 
+Whether to pass special argument C<-cmdline> containing the cmdline object to
+function. This can be overriden using the C<pass_cmdline_object> on a
+per-subcommand basis.
+
+Passing the cmdline object can be useful, e.g. to call run_help(), etc.
+
 =head2 program_name => str
 
 Default is from PERINCI_CMDLINE_PROGRAM_NAME environment or from $0.
 
 =head2 subcommands => hash | code
 
+=head2 subcommands => {NAME => {ARGUMENT=>...}, ...} | CODEREF
+
+Should be a hash of subcommand specifications or a coderef.
+
+Each subcommand specification is also a hash(ref) and should contain these keys:
+
+=over
+
+=item * C<url> (str, required)
+
+Location of function (accessed via Riap).
+
+=item * C<summary> (str, optional)
+
+Will be retrieved from function metadata at C<url> if unset
+
+=item * C<description> (str, optional)
+
+Shown in verbose help message, if description from function metadata is unset.
+
+=item * C<tags> (array of str, optional)
+
+For grouping or categorizing subcommands, e.g. when displaying list of
+subcommands.
+
+=item * C<log_any_app> (bool, optional)
+
+Whether to load Log::Any::App, default is true. For subcommands that need fast
+startup you can try turning this off for said subcommands. See L</"LOGGING"> for
+more details.
+
+=item * C<use_utf8> (bool, optional)
+
+Whether to issue L<< binmode(STDOUT, ":utf8") >>. See L</"LOGGING"> for more
+details.
+
+=item * C<undo> (bool, optional)
+
+Can be set to 0 to disable transaction for this subcommand; this is only
+relevant when C<undo> attribute is set to true.
+
+=item * C<show_in_help> (bool, optional, default 1)
+
+If you have lots of subcommands, and want to show only some of them in --help
+message, set this to 0 for subcommands that you do not want to show.
+
+=item * C<pass_cmdline_object> (bool, optional, default 0)
+
+To override C<pass_cmdline_object> attribute on a per-subcommand basis.
+
+=item * C<args> (hash, optional)
+
+If specified, will send the arguments (as well as arguments specified via the
+command-line). This can be useful for a function that serves more than one
+subcommand, e.g.:
+
+ subcommands => {
+     sub1 => {
+         summary => 'Subcommand one',
+         url     => '/some/func',
+         args    => {flag=>'one'},
+     },
+     sub2 => {
+         summary => 'Subcommand two',
+         url     => '/some/func',
+         args    => {flag=>'two'},
+     },
+ }
+
+In the example above, both subcommand C<sub1> and C<sub2> point to function at
+C</some/func>. But the function can differentiate between the two via the
+C<flag> argument being sent.
+
+ % cmdprog sub1 --foo 1 --bar 2
+ % cmdprog sub2 --foo 2
+
+In the first invocation, function will receive arguments C<< {foo=>1, bar=>2,
+flag=>'one'} >> and for the second: C<< {foo=>2, flag=>'two'} >>.
+
+=back
+
+Subcommands can also be a coderef, for dynamic list of subcommands. The coderef
+will be called as a method with hash arguments. It can be called in two cases.
+First, if called without argument C<name> (usually when doing --subcommands) it
+must return a hashref of subcommand specifications. If called with argument
+C<name> it must return subcommand specification for subcommand with the
+requested name only.
+
 =head2 summary => str
 
 =head2 tags => array of str
 
 =head2 url => str
+
+Required if you only want to run one function. URL should point to a function
+entity.
+
+Alternatively you can provide multiple functions from which the user can select
+using the first argument (see B<subcommands>).
 
 =head1 METHODS
 
@@ -441,6 +832,34 @@ to STDOUT. But in the case of streaming output, this hook can also set it up.
 Called at the end of C<run()>, right before it exits (if C<exit> attribute is
 true) or returns C<$r->{res}>. The hook has a chance to modify exit code or
 result.
+
+=head1 METADATA PROPERTY ATTRIBUTE
+
+This module observes the following Rinci metadata property attributes:
+
+=head2 x.perinci.cmdline.default_format => STR
+
+Set default output format (if user does not specify via --format command-line
+option).
+
+=head1 RESULT_METADATA
+
+This module interprets the following result metadata property/attribute:
+
+=head2 attribute: cmdline.exit_code => INT
+
+Instruct Perinci::CmdLine to use this exit code, instead of using (function
+status - 300).
+
+=head1 ENVIRONMENT
+
+=over
+
+=item * PERINCI_CMDLINE_PROGRAM_NAME => STR
+
+Can be used to set CLI program name.
+
+=back
 
 =head1 HOMEPAGE
 
