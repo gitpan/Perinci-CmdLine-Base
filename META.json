@@ -31,10 +31,9 @@
          "requires" : {
             "Complete::Bash" : "0.04",
             "Complete::Util" : "0.13",
-            "Getopt::Long::Util" : "0.72",
             "Mo" : "0",
             "Perinci::Sub::Complete" : "0.53",
-            "Perinci::Sub::GetArgs::Argv" : "0.39",
+            "Perinci::Sub::GetArgs::Argv" : "0.44",
             "Rinci" : "v1.1.41",
             "perl" : "5.010001"
          }
@@ -60,7 +59,7 @@
          "web" : "https://github.com/sharyanto/perl-Perinci-CmdLine-Base"
       }
    },
-   "version" : "0.03",
+   "version" : "0.04",
    "x_Dist_Zilla" : {
       "perl" : {
          "version" : "5.018002"

@@ -2,7 +2,7 @@ NAME
     Perinci::CmdLine::Base - Base class for Perinci::CmdLine{,::Lite}
 
 VERSION
-    This document describes version 0.03 of Perinci::CmdLine::Base (from
+    This document describes version 0.04 of Perinci::CmdLine::Base (from
     Perl distribution Perinci-CmdLine-Base), released on 2014-07-18.
 
 REQUEST KEYS
@@ -211,6 +211,21 @@ ATTRIBUTES
 
   program_name => str
     Default is from PERINCI_CMDLINE_PROGRAM_NAME environment or from $0.
+
+  riap_client => obj
+    Optional. Can be set to Perinci::Access (or compatible) instance.
+    Sometimes a Riap request needs to be performed, e.g. when requesting
+    completion to the server. If this is empty, the request won't be done.
+
+    See Perinci::CmdLine where it is set by default. In
+    Perinci::CmdLine::Lite, this is left undefined by default.
+
+  riap_client_args => hash
+    Arguments to pass to Perinci::Access constructor. This is useful for
+    passing e.g. HTTP basic authentication to Riap client
+    (Perinci::Access::HTTP::Client):
+
+     riap_client_args => {handler_args => {user=>$USER, password=>$PASS}}
 
   subcommands => hash | code
   subcommands => {NAME => {ARGUMENT=>...}, ...} | CODEREF

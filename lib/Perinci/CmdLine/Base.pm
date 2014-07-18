@@ -1,7 +1,7 @@
 package Perinci::CmdLine::Base;
 
 our $DATE = '2014-07-18'; # DATE
-our $VERSION = '0.03'; # VERSION
+our $VERSION = '0.04'; # VERSION
 
 use 5.010001;
 
@@ -31,11 +31,12 @@ has program_name => (
         }
         $pn;
     });
+has riap_client => ();
+has riap_client_args => ();
 has subcommands => ();
 has summary => ();
 has tags => ();
 has url => ();
-has _pa => ();
 
 # role: requires 'get_meta' # ($url)
 
@@ -121,7 +122,7 @@ sub do_completion {
 
     # strip subcommand name from first command-line argument because it
     # interferes with later parsing
-    if ($scd && $scn eq $words->[0]) {
+    if ($scd && @$words && $scn eq $words->[0]) {
         shift @$words;
         $cword--;
     }
@@ -157,59 +158,39 @@ sub do_completion {
         # not do_arg
     }
 
+    my $compres;
+
     # get all command-line options
 
-    my $co = $self->common_opts;
+    my $co  = $self->common_opts;
+    my $co2 = { map { $co->{$_}{getopt} => sub {} } keys %$co };
     my $meta;
-    my @all_opts;
-    my @common_opts;
+    my $genres;
     {
-        my %go_spec;
-        my %go_spec_common = map { $co->{$_}{getopt} => sub {} } keys %$co;
+        require Perinci::Sub::GetArgs::Argv;
 
+        my $co = $self->common_opts;
         $meta = $self->get_meta($scd->{url} // $self->{url});
-
-        if ($meta) {
-            require Perinci::Sub::GetArgs::Argv;
-            my $res = Perinci::Sub::GetArgs::Argv::gen_getopt_long_spec_from_meta(
-                meta         => $meta,
-                common_opts  => $co,
-                per_arg_json => $self->{per_arg_json},
-                per_arg_yaml => $self->{per_arg_yaml},
-            );
-            %go_spec = %{ $res->[2] };
-        } else {
-            %go_spec = %go_spec_common;
-        }
-        require Getopt::Long::Util;
-        for (keys %go_spec_common) {
-            my $res = Getopt::Long::Util::parse_getopt_long_opt_spec($_);
-            for (@{ $res->{opts} }) {
-                push @common_opts, length > 1 ? "--$_" : "-$_";
-            }
-        }
-        for (keys %go_spec) {
-            my $res = Getopt::Long::Util::parse_getopt_long_opt_spec($_);
-            for (@{ $res->{opts} }) {
-                push @all_opts, length > 1 ? "--$_" : "-$_";
-            }
-        }
+        $genres = Perinci::Sub::GetArgs::Argv::gen_getopt_long_spec_from_meta(
+            meta         => $meta,
+            common_opts  => $co2,
+            per_arg_json => $self->{per_arg_json},
+            per_arg_yaml => $self->{per_arg_yaml},
+        );
+        if ($genres->[0] != 200) { $compres = []; goto L1 }
     }
 
-    # do completion
-
-    my $res;
     if ($do_arg) {
         # Completing subcommand argument names & values ...
         require Perinci::Sub::Complete;
-        $res = Perinci::Sub::Complete::complete_cli_arg(
+        $compres = Perinci::Sub::Complete::complete_cli_arg(
             meta            => $meta,
             words           => $words,
             cword           => $cword,
-            common_opts     => \@common_opts,
+            common_opts     => $co2,
             riap_server_url => $scd->{url},
             riap_uri        => undef,
-            riap_client     => $self->_pa,
+            riap_client     => $self->riap_client,
             custom_completer     => $self->custom_completer,
             custom_arg_completer => $self->custom_arg_completer,
         );
@@ -217,10 +198,10 @@ sub do_completion {
         require Complete::Util;
         # Completing top-level options + subcommand name ...
         my @ary;
-        push @ary, @all_opts;
+        push @ary, @${ $genres->[3]{'func.opts'} };
         my $scs = $self->list_subcommands;
         push @ary, keys %$scs;
-        $res = {
+        $compres = {
             completion => Complete::Util::complete_array_elem(
                 word=>$word, array=>\@ary,
             ),
@@ -228,7 +209,8 @@ sub do_completion {
         };
     }
 
-    [200, "OK", Complete::Bash::format_completion($res)];
+  L1:
+    [200, "OK", Complete::Bash::format_completion($compres)];
 }
 
 sub _parse_argv1 {
@@ -286,9 +268,9 @@ sub _parse_argv1 {
             unless ($opts->{for_completion}) {
                 die [500, "Unknown subcommand: $scn"] unless $scd;
             }
-        } elsif (!$r->{action}) {
-            # user doesn't specify any subcommand, or specific action. display
-            # help instead.
+        } elsif (!$r->{action} && $self->{subcommands}) {
+            # program has subcommands but user doesn't specify any subcommand,
+            # or specific action. display help instead.
             $r->{action} = 'help';
             $r->{skip_parse_subcommand_argv} = 1;
         } else {
@@ -371,7 +353,7 @@ sub parse_argv {
 sub run {
     my ($self) = @_;
 
-    my $r = {};
+    my $r = {orig_argv=>[@ARGV]};
 
     # completion is special case, we delegate to do_completion()
     if ($ENV{COMP_LINE}) {
@@ -383,7 +365,14 @@ sub run {
         $self->hook_before_run($r);
 
         my $parse_res = $self->parse_argv($r);
-        die $parse_res unless $parse_res->[0] == 200;
+        if ($parse_res->[0] == 502) {
+            # we need to send ARGV to the server, because it's impossible to get
+            # args from ARGV (e.g. there's a cmdline_alias with CODE, which has
+            # been transformed into string when crossing network boundary)
+            $r->{send_argv} = 1;
+        } elsif ($parse_res->[0] != 200) {
+            die $parse_res;
+        }
         $r->{parse_argv_res} = $parse_res;
 
         # set defaults
@@ -395,7 +384,7 @@ sub run {
             if $missing && @$missing;
 
         my $args = $parse_res->[2];
-        $r->{args} = $args;
+        $r->{args} = $args // {};
         my $scd = $r->{subcommand_data};
         $args->{-cmdline} = $self if $scd->{pass_cmdline_object} //
             $self->pass_cmdline_object;
@@ -443,7 +432,7 @@ Perinci::CmdLine::Base - Base class for Perinci::CmdLine{,::Lite}
 
 =head1 VERSION
 
-This document describes version 0.03 of Perinci::CmdLine::Base (from Perl distribution Perinci-CmdLine-Base), released on 2014-07-18.
+This document describes version 0.04 of Perinci::CmdLine::Base (from Perl distribution Perinci-CmdLine-Base), released on 2014-07-18.
 
 =for Pod::Coverage ^(.+)$
 
@@ -668,6 +657,23 @@ Passing the cmdline object can be useful, e.g. to call run_help(), etc.
 =head2 program_name => str
 
 Default is from PERINCI_CMDLINE_PROGRAM_NAME environment or from $0.
+
+=head2 riap_client => obj
+
+Optional. Can be set to L<Perinci::Access> (or compatible) instance. Sometimes a
+Riap request needs to be performed, e.g. when requesting completion to the
+server. If this is empty, the request won't be done.
+
+See Perinci::CmdLine where it is set by default. In Perinci::CmdLine::Lite, this
+is left undefined by default.
+
+=head2 riap_client_args => hash
+
+Arguments to pass to L<Perinci::Access> constructor. This is useful for passing
+e.g. HTTP basic authentication to Riap client
+(L<Perinci::Access::HTTP::Client>):
+
+ riap_client_args => {handler_args => {user=>$USER, password=>$PASS}}
 
 =head2 subcommands => hash | code
 
