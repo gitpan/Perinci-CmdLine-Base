@@ -1,7 +1,7 @@
 package Perinci::CmdLine::Base;
 
-our $DATE = '2014-07-17'; # DATE
-our $VERSION = '0.02'; # VERSION
+our $DATE = '2014-07-18'; # DATE
+our $VERSION = '0.03'; # VERSION
 
 use 5.010001;
 
@@ -113,8 +113,8 @@ sub do_completion {
         $self->_parse_argv1($r, {for_completion=>1});
     }
 
-    my ($words, $cword) = Complete::Bash::parse_cmdline(
-        undef, undef, $word_breaks);
+    my ($words, $cword) = @{ Complete::Bash::parse_cmdline(
+        undef, undef, $word_breaks) };
 
     my $scn = $r->{subcommand_name} // "";
     my $scd = $r->{subcommand_data};
@@ -443,7 +443,7 @@ Perinci::CmdLine::Base - Base class for Perinci::CmdLine{,::Lite}
 
 =head1 VERSION
 
-This document describes version 0.02 of Perinci::CmdLine::Base (from Perl distribution Perinci-CmdLine-Base), released on 2014-07-17.
+This document describes version 0.03 of Perinci::CmdLine::Base (from Perl distribution Perinci-CmdLine-Base), released on 2014-07-18.
 
 =for Pod::Coverage ^(.+)$
 
