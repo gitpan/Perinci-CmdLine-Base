@@ -59,7 +59,7 @@
          "web" : "https://github.com/sharyanto/perl-Perinci-CmdLine-Base"
       }
    },
-   "version" : "0.04",
+   "version" : "0.05",
    "x_Dist_Zilla" : {
       "perl" : {
          "version" : "5.018002"

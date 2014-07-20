@@ -1,7 +1,7 @@
 package Perinci::CmdLine::Base;
 
 our $DATE = '2014-07-18'; # DATE
-our $VERSION = '0.04'; # VERSION
+our $VERSION = '0.05'; # VERSION
 
 use 5.010001;
 
@@ -114,6 +114,10 @@ sub do_completion {
         $self->_parse_argv1($r, {for_completion=>1});
     }
 
+    # force format to text for completion, because user might type 'cmd --format
+    # blah -^'.
+    $r->{format} = 'text';
+
     my ($words, $cword) = @{ Complete::Bash::parse_cmdline(
         undef, undef, $word_breaks) };
 
@@ -198,7 +202,7 @@ sub do_completion {
         require Complete::Util;
         # Completing top-level options + subcommand name ...
         my @ary;
-        push @ary, @${ $genres->[3]{'func.opts'} };
+        push @ary, @{ $genres->[3]{'func.opts'} };
         my $scs = $self->list_subcommands;
         push @ary, keys %$scs;
         $compres = {
@@ -243,9 +247,9 @@ sub _parse_argv1 {
         my $scn = $r->{subcommand_name};
         if (!defined($scn) && defined($self->{default_subcommand})) {
             # get from default_subcommand
-            if ($self->{get_subcommand_data} == 1) {
+            if ($self->{get_subcommand_from_arg} == 1) {
                 $scn = $self->{default_subcommand};
-            } elsif ($self->{get_subcommand_data} == 2 && !@ARGV) {
+            } elsif ($self->{get_subcommand_from_arg} == 2 && !@ARGV) {
                 $scn = $self->{default_subcommand};
             }
         }
@@ -432,7 +436,7 @@ Perinci::CmdLine::Base - Base class for Perinci::CmdLine{,::Lite}
 
 =head1 VERSION
 
-This document describes version 0.04 of Perinci::CmdLine::Base (from Perl distribution Perinci-CmdLine-Base), released on 2014-07-18.
+This document describes version 0.05 of Perinci::CmdLine::Base (from Perl distribution Perinci-CmdLine-Base), released on 2014-07-18.
 
 =for Pod::Coverage ^(.+)$
 

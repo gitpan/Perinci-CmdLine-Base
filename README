@@ -2,7 +2,7 @@ NAME
     Perinci::CmdLine::Base - Base class for Perinci::CmdLine{,::Lite}
 
 VERSION
-    This document describes version 0.04 of Perinci::CmdLine::Base (from
+    This document describes version 0.05 of Perinci::CmdLine::Base (from
     Perl distribution Perinci-CmdLine-Base), released on 2014-07-18.
 
 REQUEST KEYS
